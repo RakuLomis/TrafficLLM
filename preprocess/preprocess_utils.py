@@ -3,6 +3,7 @@ from packet_data_preprocess import build_packet_data
 import random
 import json
 import os
+from collections import defaultdict
 
 
 MAX_SAMPLING_NUMBER = 100  # 5000 # number of samples per class
@@ -20,6 +21,73 @@ def split_dataset(build_data, sampling=True):
     train_data = build_data[:train_nb]
     test_data = build_data[train_nb:train_nb + test_nb]
 
+    return train_data, test_data
+
+
+def _extract_field(packet_text, field_name):
+    marker = field_name + ": "
+    start = packet_text.find(marker)
+    if start == -1:
+        return None
+    start += len(marker)
+    end = packet_text.find(", ", start)
+    if end == -1:
+        end = len(packet_text)
+    value = packet_text[start:end].strip()
+    return value if value else None
+
+
+def _packet_flow_key(packet_text, pcap_name):
+    src = _extract_field(packet_text, "ip.src")
+    dst = _extract_field(packet_text, "ip.dst")
+    proto = _extract_field(packet_text, "ip.proto")
+    sport = _extract_field(packet_text, "tcp.srcport")
+    dport = _extract_field(packet_text, "tcp.dstport")
+
+    if sport is None or dport is None:
+        sport = _extract_field(packet_text, "udp.srcport")
+        dport = _extract_field(packet_text, "udp.dstport")
+
+    # Keep unknown packets together per pcap so they do not leak across train/test.
+    if None in (src, dst, proto, sport, dport):
+        return "unknown|" + pcap_name
+    return "|".join([src, dst, proto, sport, dport])
+
+
+def split_dataset_by_flow(packet_data_with_flow, sampling=True):
+    flow_buckets = defaultdict(list)
+    for flow_key, packet_text in packet_data_with_flow:
+        flow_buckets[flow_key].append(packet_text)
+
+    flow_keys = list(flow_buckets.keys())
+    random.shuffle(flow_keys)
+
+    total_samples = len(packet_data_with_flow)
+    target_total = min(MAX_SAMPLING_NUMBER, total_samples) if sampling else total_samples
+
+    selected_flow_keys = []
+    selected_count = 0
+    for flow_key in flow_keys:
+        if selected_count >= target_total:
+            break
+        selected_flow_keys.append(flow_key)
+        selected_count += len(flow_buckets[flow_key])
+
+    target_train = int(target_total * TRAINING_SAMPLE_RATIO)
+    train_data = []
+    test_data = []
+    train_count = 0
+
+    for flow_key in selected_flow_keys:
+        packets = flow_buckets[flow_key]
+        if train_count < target_train:
+            train_data.extend(packets)
+            train_count += len(packets)
+        else:
+            test_data.extend(packets)
+
+    random.shuffle(train_data)
+    random.shuffle(test_data)
     return train_data, test_data
 
 
@@ -42,16 +110,28 @@ def write_labels(labels, output_path):
 
 def build_dataset(args, path, file):
     build_data = []
+    packet_data_with_flow = []
     files_path = os.path.join(path, file)
     pcaps = os.listdir(files_path)
     for pcap in pcaps:
         if args.granularity == "flow":
-            pcap_data = build_flow_data(os.path.join(files_path, pcap))
+            pcap_data = build_flow_data(
+                os.path.join(files_path, pcap),
+                sanitize_strong_indicators=getattr(args, "sanitize_strong_indicators", False)
+            )
+            build_data.extend(pcap_data)
         else:
-            pcap_data = build_packet_data(os.path.join(files_path, pcap))
-        build_data.extend(pcap_data)
+            pcap_data = build_packet_data(
+                os.path.join(files_path, pcap),
+                sanitize_strong_indicators=getattr(args, "sanitize_strong_indicators", False)
+            )
+            for packet_text in pcap_data:
+                packet_data_with_flow.append((_packet_flow_key(packet_text, pcap), packet_text))
 
-    train_data, test_data = split_dataset(build_data)
+    if args.granularity == "flow":
+        train_data, test_data = split_dataset(build_data)
+    else:
+        train_data, test_data = split_dataset_by_flow(packet_data_with_flow)
     return train_data, test_data
 
 

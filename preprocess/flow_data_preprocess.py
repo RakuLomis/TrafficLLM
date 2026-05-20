@@ -8,9 +8,12 @@ MAX_PACKET_LENGTH_IN_FLOW = 256
 HEX_PACKET_START_INDEX = 0  # 48 # 76
 
 
-def build_flow_data(pcap_file, flow_feature="flow bytes"):
+def build_flow_data(pcap_file, flow_feature="flow bytes", sanitize_strong_indicators=False):
 
     build_data = []
+    if sanitize_strong_indicators and flow_feature == "flow bytes":
+        # Avoid raw packet-byte flow feature because it includes ETH/IP/ports directly.
+        flow_feature = "flow sequence"
 
     if flow_feature == "flow bytes":
 

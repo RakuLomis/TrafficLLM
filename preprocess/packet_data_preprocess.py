@@ -12,7 +12,20 @@ MAX_PACKET_LENGTH = 1024
 HEX_PACKET_START_INDEX = 0  # 0 # 48 # 76
 
 
-def build_packet_data(pcap_file, packet_feature="traffic words"):
+SANITIZED_FIELDS = {
+    "eth.dst", "eth.dst_resolved", "eth.src", "eth.src_resolved", "eth.type",
+    "ip.src", "ip.dst",
+    "tcp.srcport", "tcp.dstport", "udp.srcport", "udp.dstport",
+    "tcp.stream", "udp.stream",
+    "tcp.payload",
+}
+
+
+def _sanitize_fields(fields):
+    return [field for field in fields if field not in SANITIZED_FIELDS]
+
+
+def build_packet_data(pcap_file, packet_feature="traffic words", sanitize_strong_indicators=False):
     build_data = []
 
     if packet_feature == "generation 5tuple":
@@ -118,6 +131,8 @@ def build_packet_data(pcap_file, packet_feature="traffic words"):
                   "tcp.time_relative", "tcp.time_delta", "tcp.analysis.bytes_in_flight", "tcp.analysis.push_bytes_sent", "tcp.segment",
                   "tcp.segment.count", "tcp.reassembled.length", "tcp.payload", "udp.srcport", "udp.dstport", "udp.length",
                   "udp.checksum", "udp.checksum.status", "udp.stream", "data.len"]
+        if sanitize_strong_indicators:
+            fields = _sanitize_fields(fields)
 
         extract_str = " -e " + " -e ".join(fields) + " "
         cmd = "tshark -r " + pcap_file + extract_str + "-T fields -Y 'tcp or udp' > " + tmp_path
